@@ -48,8 +48,9 @@ class Request:
             self.port = url.port
         else:
             self.port = 80
+        # Holds all headers to be sent along in a request
         self.headers = {}
-
+        # Holds the body of the request and must be parsed
         if args is None:
             self.body = ""
         else:
@@ -205,8 +206,8 @@ class HTTPClient(object):
         request.set_header("User-Agent", HTTPClient.user_agent)
         request.set_header("Accept", '*/*')  # Accept any incoming content type
         request.set_header("Connection", "close")  # Close the connection after one go, must specify since keep-alive is default on HTTP 1.1
-        request.set_header("Content-Type", "application/x-www-form-urlencoded")
-        request.set_header("Content-Length", len(request.get_body().encode('utf-8')))
+        request.set_header("Content-Type", "application/x-www-form-urlencoded") # Currently the only content-type being handled
+        request.set_header("Content-Length", len(request.get_body().encode('utf-8'))) # Content length may be 0, so this must be specified
 
         # Connect to the specified web resource
         if debug:
