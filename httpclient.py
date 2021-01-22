@@ -17,13 +17,15 @@
 # Do not use urllib's HTTP GET and POST mechanisms.
 # Write your own HTTP GET and POST
 # The point is to understand what you have to send and get experience with it
+debug = False
 
 import sys
 import socket
 import re
 # you may use urllib to encode data appropriately
-import urllib.parse
+from urllib.parse import urlparse, urlencode
 
+# Define an exception
 def help():
     print("httpclient.py [GET/POST] [URL]\n")
 
@@ -32,8 +34,78 @@ class HTTPResponse(object):
         self.code = code
         self.body = body
 
+class Request:
+    def __init__(self, method, url, args = None):
+        self.method = method
+        self.host = url.hostname
+
+        if url.path != "":
+            self.path = url.path
+        else:
+            self.path = '/'
+
+        if url.port:
+            self.port = url.port
+        else:
+            self.port = 80
+        self.headers = {}
+
+        if args is None:
+            self.body = ""
+        else:
+            self.body = urlencode(args) # Currently formats the data for url-form-encoded
+
+
+    def form_request(self, protocol):
+        # Forms the request to be sent
+
+        # Setting the accept header to allow all incoming content types (Not sure if I should just limit it though?)
+        request = "{method} {path} {protocol}\r\nHost:{host}\r\n".format(
+            method     = self.get_method(),
+            path       = self.get_path(),
+            host       = self.get_host(),
+            protocol   = protocol
+        )
+        # Parse and concat any additional headers set on the request
+        for header_k, header_v in self.get_headers().items():
+            request += "{key}:{value}\r\n".format(key=header_k, value=header_v)
+        request+= "\r\n"
+
+        # Handle Body if POST Request
+        if self.get_method() == "POST":
+            request += self.get_body()
+
+        return request
+
+    def set_header(self, k, v):
+        self.headers[k] = v
+
+    def get_headers(self):
+        return self.headers
+
+    def get_host(self):
+        return self.host
+
+    def get_port(self):
+        return self.port
+
+    def get_method(self):
+        return self.method
+
+    def get_path(self):
+        return self.path
+
+    def get_body(self):
+        return self.body
+
 class HTTPClient(object):
+    protocol = "HTTP/1.1"
+    user_agent = "404-HTTP-Client"
     #def get_host_port(self,url):
+
+    # Will use this method to handle 404s
+    def handle_exceptions(self, data):
+        pass
 
     def connect(self, host, port):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -41,17 +113,36 @@ class HTTPClient(object):
         return None
 
     def get_code(self, data):
-        return None
+        # Split the data on spaces and the 1st index "should" contain the code
+        data = data.split(' ')
+        code = None
+        try:
+            code = int(data[1])
+        except Exception as e:
+            # Some unexpected error
+            code = 500
+        finally:
+            return code
 
     def get_headers(self,data):
         return None
 
     def get_body(self, data):
-        return None
+        # The body of a response is evident after the headers are complete
+        # Header completion is signified by a double carriage return and newline
+        # re.DOTALL = True
+        try:
+            body = re.search("\r\n\r\n(.*)", data, flags=re.DOTALL)
+            body = body.group(1)
+        except Exception as e:
+            # Some unexpected error
+            body = ""
+        finally:
+            return body
     
     def sendall(self, data):
         self.socket.sendall(data.encode('utf-8'))
-        
+
     def close(self):
         self.socket.close()
 
@@ -68,13 +159,74 @@ class HTTPClient(object):
         return buffer.decode('utf-8')
 
     def GET(self, url, args=None):
-        code = 500
-        body = ""
+        # Parse incoming url
+        url = urlparse(url)
+
+        if debug:
+            print("GET : {url}".format(url=url))
+        request = Request('GET', url)
+
+        # Set any headers the GET request will need
+        request.set_header("User-Agent", HTTPClient.user_agent)
+        request.set_header("Accept", '*/*') # Accept any incoming content type
+        request.set_header("Connection", "close") # Close the connection after one go, must specify since keep-alive is default on HTTP 1.1
+
+        # Connect to the specified web resource
+        if debug:
+            print("Connecting to: {host}:{port}".format(host=request.get_host(), port=request.get_port()))
+        self.connect(request.get_host(), request.get_port())
+
+        # Send request to the resource
+        request_str = request.form_request(HTTPClient.protocol)
+        if debug:
+            print("Sending: ", request_str.encode())
+        self.sendall(request_str)
+
+        # Receive result from resource
+        data = self.recvall(self.socket)
+        self.close()
+
+        if debug:
+            print("Response:", data)
+
+        # Get the code returned
+        code = self.get_code(data)
+        body = self.get_body(data)
+
         return HTTPResponse(code, body)
 
     def POST(self, url, args=None):
-        code = 500
-        body = ""
+        url = urlparse(url)
+        if debug:
+            print("POST : {url}".format(url=url))
+        request = Request('POST', url, args)
+
+        # Set headers for the POST request
+        request.set_header("User-Agent", HTTPClient.user_agent)
+        request.set_header("Accept", '*/*')  # Accept any incoming content type
+        request.set_header("Connection", "close")  # Close the connection after one go, must specify since keep-alive is default on HTTP 1.1
+        request.set_header("Content-Type", "application/x-www-form-urlencoded")
+        request.set_header("Content-Length", len(request.get_body().encode('utf-8')))
+
+        # Connect to the specified web resource
+        if debug:
+            print("Connecting to: {host}:{port}".format(host=request.get_host(), port=request.get_port()))
+        self.connect(request.get_host(), request.get_port())
+
+        # Send POST request to the resource
+        request_str = request.form_request(HTTPClient.protocol)
+        if debug:
+            print("Sending:", request_str.encode())
+        self.sendall(request_str)
+
+        # Get response from the server
+        data = self.recvall(self.socket)
+        if debug:
+            print("Response:", data)
+        self.close()
+        # Get code and body
+        code = self.get_code(data)
+        body = self.get_body(data)
         return HTTPResponse(code, body)
 
     def command(self, url, command="GET", args=None):
